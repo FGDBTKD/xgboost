@@ -34,6 +34,18 @@ private[spark] trait LearningTaskParams extends Params {
   final def getObjective: String = $(objective)
 
   /**
+   * The learning objective type of the specified custom objective and eval.
+   * Corresponding type will be assigned if custom objective is defined
+   * options: regression, classification. default: null
+   */
+  final val objectiveType = new Param[String](this, "objectiveType", "objective type used for " +
+    s"training, options: {${LearningTaskParams.supportedObjectiveType.mkString(",")}",
+    (value: String) => LearningTaskParams.supportedObjectiveType.contains(value))
+
+  final def getObjectiveType: String = $(objectiveType)
+
+
+  /**
    * the initial prediction score of all instances, global bias. default=0.5
    */
   final val baseScore = new DoubleParam(this, "baseScore", "the initial prediction score of all" +
@@ -75,6 +87,13 @@ private[spark] trait LearningTaskParams extends Params {
 
   final def getNumEarlyStoppingRounds: Int = $(numEarlyStoppingRounds)
 
+
+  final val maximizeEvaluationMetrics = new BooleanParam(this, "maximizeEvaluationMetrics",
+    "define the expected optimization to the evaluation metrics, true to maximize otherwise" +
+      " minimize it")
+
+  final def getMaximizeEvaluationMetrics: Boolean = $(maximizeEvaluationMetrics)
+
   setDefault(objective -> "reg:linear", baseScore -> 0.5,
     trainTestRatio -> 1.0, numEarlyStoppingRounds -> 0)
 }
@@ -82,7 +101,9 @@ private[spark] trait LearningTaskParams extends Params {
 private[spark] object LearningTaskParams {
   val supportedObjective = HashSet("reg:linear", "reg:logistic", "binary:logistic",
     "binary:logitraw", "count:poisson", "multi:softmax", "multi:softprob", "rank:pairwise",
-    "reg:gamma", "reg:tweedie")
+    "rank:ndcg", "rank:map", "reg:gamma", "reg:tweedie")
+
+  val supportedObjectiveType = HashSet("regression", "classification")
 
   val supportedEvalMetrics = HashSet("rmse", "mae", "logloss", "error", "merror", "mlogloss",
     "auc", "aucpr", "ndcg", "map", "gamma-deviance")

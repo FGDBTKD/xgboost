@@ -83,13 +83,6 @@ class GBLinear : public GradientBooster {
                ObjFunction* obj) override {
     monitor_.Start("DoBoost");
 
-    if (!p_fmat->HaveColAccess(false)) {
-      monitor_.Start("InitColAccess");
-      std::vector<bool> enabled(p_fmat->Info().num_col_, true);
-      p_fmat->InitColAccess(param_.max_row_perbatch, false);
-      monitor_.Stop("InitColAccess");
-    }
-
     model_.LazyInitModel();
     this->LazySumWeights(p_fmat);
 
@@ -143,7 +136,7 @@ class GBLinear : public GradientBooster {
     model_.LazyInitModel();
     CHECK_EQ(ntree_limit, 0U)
         << "GBLinear::PredictContribution: ntrees is only valid for gbtree predictor";
-    const std::vector<bst_float>& base_margin = p_fmat->Info().base_margin_;
+    const auto& base_margin = p_fmat->Info().base_margin_.ConstHostVector();
     const int ngroup = model_.param.num_output_group;
     const size_t ncolumns = model_.param.num_feature + 1;
     // allocate space for (#features + bias) times #groups times #rows
@@ -152,10 +145,7 @@ class GBLinear : public GradientBooster {
     // make sure contributions is zeroed, we could be reusing a previously allocated one
     std::fill(contribs.begin(), contribs.end(), 0);
     // start collecting the contributions
-     auto iter = p_fmat->RowIterator();
-    iter->BeforeFirst();
-    while (iter->Next()) {
-       auto &batch = iter->Value();
+    for (const auto &batch : p_fmat->GetRowBatches()) {
       // parallel over local batch
       const auto nsize = static_cast<bst_omp_uint>(batch.Size());
       #pragma omp parallel for schedule(static)
@@ -201,13 +191,11 @@ class GBLinear : public GradientBooster {
     monitor_.Start("PredictBatchInternal");
       model_.LazyInitModel();
     std::vector<bst_float> &preds = *out_preds;
-    const std::vector<bst_float>& base_margin = p_fmat->Info().base_margin_;
+    const auto& base_margin = p_fmat->Info().base_margin_.ConstHostVector();
     // start collecting the prediction
-     auto iter = p_fmat->RowIterator();
     const int ngroup = model_.param.num_output_group;
     preds.resize(p_fmat->Info().num_row_ * ngroup);
-    while (iter->Next()) {
-       auto &batch = iter->Value();
+    for (const auto &batch : p_fmat->GetRowBatches()) {
       // output convention: nrow * k, where nrow is number of rows
       // k is number of group
       // parallel over local batch

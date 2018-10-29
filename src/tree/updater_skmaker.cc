@@ -30,7 +30,7 @@ class SketchMaker: public BaseMaker {
     param_.learning_rate = lr / trees.size();
     // build tree
     for (auto tree : trees) {
-      this->Update(gpair->HostVector(), p_fmat, tree);
+      this->Update(gpair->ConstHostVector(), p_fmat, tree);
     }
     param_.learning_rate = lr;
   }
@@ -142,12 +142,9 @@ class SketchMaker: public BaseMaker {
     }
     thread_sketch_.resize(omp_get_max_threads());
     // number of rows in
-    const size_t nrows = p_fmat->BufferedRowset().Size();
+    const size_t nrows = p_fmat->Info().num_row_;
     // start accumulating statistics
-    auto iter = p_fmat->ColIterator();
-    iter->BeforeFirst();
-    while (iter->Next()) {
-      auto &batch = iter->Value();
+    for (const auto &batch : p_fmat->GetSortedColumnBatches()) {
       // start enumeration
       const auto nsize = static_cast<bst_omp_uint>(batch.Size());
       #pragma omp parallel for schedule(dynamic, 1)

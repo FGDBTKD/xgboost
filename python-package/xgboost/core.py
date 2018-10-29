@@ -118,13 +118,27 @@ def _load_lib():
     if len(lib_paths) == 0:
         return None
     pathBackup = os.environ['PATH']
+    lib_success = False
+    os_error_list = []
     for lib_path in lib_paths:
         try:
             # needed when the lib is linked with non-system-available dependencies
             os.environ['PATH'] = pathBackup + os.pathsep + os.path.dirname(lib_path)
             lib = ctypes.cdll.LoadLibrary(lib_path)
-        except OSError:
+            lib_success = True
+        except OSError as e:
+            os_error_list.append(str(e))
             continue
+    if not lib_success:
+        libname = os.path.basename(lib_paths[0])
+        raise XGBoostError(
+            'XGBoost Library ({}) could not be loaded.\n'.format(libname) +
+            'Likely causes:\n' +
+            '  * OpenMP runtime is not installed ' +
+            '(vcomp140.dll or libgomp-1.dll for Windows, ' +
+            'libgomp.so for UNIX-like OSes)\n' +
+            '  * You are running 32-bit Python on a 64-bit OS\n' +
+            'Error message(s): {}\n'.format(os_error_list))
     lib.XGBGetLastError.restype = ctypes.c_char_p
     lib.callback = _get_log_callback_func()
     if lib.XGBRegisterLogCallback(lib.callback) != 0:
@@ -337,6 +351,11 @@ class DMatrix(object):
         # force into void_p, mac need to pass things in as void_p
         if data is None:
             self.handle = None
+
+            if feature_names is not None:
+                self._feature_names = feature_names
+            if feature_types is not None:
+                self._feature_types = feature_types
             return
 
         data, feature_names, feature_types = _maybe_pandas_data(data,
@@ -725,7 +744,8 @@ class DMatrix(object):
         res : DMatrix
             A new DMatrix containing only selected indices.
         """
-        res = DMatrix(None, feature_names=self.feature_names)
+        res = DMatrix(None, feature_names=self.feature_names,
+                      feature_types=self.feature_types)
         res.handle = ctypes.c_void_p()
         _check_call(_LIB.XGDMatrixSliceDMatrix(self.handle,
                                                c_array(ctypes.c_int, rindex),
@@ -830,7 +850,7 @@ class DMatrix(object):
 
 
 class Booster(object):
-    """A Booster of of XGBoost.
+    """A Booster of XGBoost.
 
     Booster is the model of xgboost, that contains low level routines for
     training, prediction and evaluation.
@@ -861,6 +881,10 @@ class Booster(object):
                                          ctypes.byref(self.handle)))
         self.set_param({'seed': 0})
         self.set_param(params or {})
+        if (params is not None) and ('booster' in params):
+            self.booster = params['booster']
+        else:
+            self.booster = 'gbtree'
         if model_file is not None:
             self.load_model(model_file)
 
@@ -1365,6 +1389,17 @@ class Booster(object):
     def get_fscore(self, fmap=''):
         """Get feature importance of each feature.
 
+        .. note:: Feature importance is defined only for tree boosters
+
+            Feature importance is only defined when the decision tree model is chosen as base
+            learner (`booster=gbtree`). It is not defined for other base learner types, such
+            as linear learners (`booster=gblinear`).
+
+        .. note:: Zero-importance features will not be included
+
+           Keep in mind that this function does not include zero-importance feature, i.e.
+           those features that have not been used in any split conditions.
+
         Parameters
         ----------
         fmap: str (optional)
@@ -1376,11 +1411,18 @@ class Booster(object):
     def get_score(self, fmap='', importance_type='weight'):
         """Get feature importance of each feature.
         Importance type can be defined as:
-            'weight' - the number of times a feature is used to split the data across all trees.
-            'gain' - the average gain across all splits the feature is used in.
-            'cover' - the average coverage across all splits the feature is used in.
-            'total_gain' - the total gain across all splits the feature is used in.
-            'total_cover' - the total coverage across all splits the feature is used in.
+
+        * 'weight': the number of times a feature is used to split the data across all trees.
+        * 'gain': the average gain across all splits the feature is used in.
+        * 'cover': the average coverage across all splits the feature is used in.
+        * 'total_gain': the total gain across all splits the feature is used in.
+        * 'total_cover': the total coverage across all splits the feature is used in.
+
+        .. note:: Feature importance is defined only for tree boosters
+
+            Feature importance is only defined when the decision tree model is chosen as base
+            learner (`booster=gbtree`). It is not defined for other base learner types, such
+            as linear learners (`booster=gblinear`).
 
         Parameters
         ----------
@@ -1389,6 +1431,10 @@ class Booster(object):
         importance_type: str, default 'weight'
             One of the importance types defined above.
         """
+
+        if self.booster != 'gbtree':
+            raise ValueError('Feature importance is not defined for Booster type {}'
+                             .format(self.booster))
 
         allowed_importance_types = ['weight', 'gain', 'cover', 'total_gain', 'total_cover']
         if importance_type not in allowed_importance_types:
@@ -1496,6 +1542,7 @@ class Booster(object):
 
     def get_split_value_histogram(self, feature, fmap='', bins=None, as_pandas=True):
         """Get split value histogram of a feature
+
         Parameters
         ----------
         feature: str
@@ -1506,7 +1553,7 @@ class Booster(object):
             The maximum number of bins.
             Number of bins equals number of unique split values n_unique,
             if bins == None or bins > n_unique.
-        as_pandas : bool, default True
+        as_pandas: bool, default True
             Return pd.DataFrame when pandas is installed.
             If False or pandas is not installed, return numpy ndarray.
 

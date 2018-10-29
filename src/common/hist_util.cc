@@ -17,7 +17,6 @@ namespace xgboost {
 namespace common {
 
 void HistCutMatrix::Init(DMatrix* p_fmat, uint32_t max_num_bins) {
-  using WXQSketch = common::WXQuantileSketch<bst_float, bst_float>;
   const MetaInfo& info = p_fmat->Info();
 
   // safe factor for better accuracy
@@ -33,10 +32,8 @@ void HistCutMatrix::Init(DMatrix* p_fmat, uint32_t max_num_bins) {
     s.Init(info.num_row_, 1.0 / (max_num_bins * kFactor));
   }
 
-  auto iter = p_fmat->RowIterator();
-  iter->BeforeFirst();
-  while (iter->Next()) {
-     auto &batch = iter->Value();
+  const auto& weights = info.weights_.HostVector();
+  for (const auto &batch : p_fmat->GetRowBatches()) {
     #pragma omp parallel num_threads(nthread)
     {
       CHECK_EQ(nthread, omp_get_num_threads());
@@ -50,7 +47,8 @@ void HistCutMatrix::Init(DMatrix* p_fmat, uint32_t max_num_bins) {
           SparsePage::Inst inst = batch[i];
           for (auto& ins : inst) {
             if (ins.index >= begin && ins.index < end) {
-              sketchs[ins.index].Push(ins.fvalue, info.GetWeight(ridx));
+              sketchs[ins.index].Push(ins.fvalue,
+                                      weights.size() > 0 ? weights[ridx] : 1.0f);
             }
           }
         }
@@ -127,17 +125,14 @@ uint32_t HistCutMatrix::GetBinIdx(const Entry& e) {
 
 void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_num_bins) {
   cut.Init(p_fmat, max_num_bins);
-  auto iter = p_fmat->RowIterator();
 
   const int nthread = omp_get_max_threads();
   const uint32_t nbins = cut.row_ptr.back();
   hit_count.resize(nbins, 0);
   hit_count_tloc_.resize(nthread * nbins, 0);
 
-  iter->BeforeFirst();
   row_ptr.push_back(0);
-  while (iter->Next()) {
-     auto &batch = iter->Value();
+  for (const auto &batch : p_fmat->GetRowBatches()) {
     const size_t rbegin = row_ptr.size() - 1;
     for (size_t i = 0; i < batch.Size(); ++i) {
       row_ptr.push_back(batch[i].size() + row_ptr.back());
@@ -402,7 +397,6 @@ void GHistIndexBlockMatrix::Init(const GHistIndexMatrix& gmat,
 void GHistBuilder::BuildHist(const std::vector<GradientPair>& gpair,
                              const RowSetCollection::Elem row_indices,
                              const GHistIndexMatrix& gmat,
-                             const std::vector<bst_uint>& feat_set,
                              GHistRow hist) {
   data_.resize(nbins_ * nthread_, GHistEntry());
   std::fill(data_.begin(), data_.end(), GHistEntry());
@@ -461,7 +455,6 @@ void GHistBuilder::BuildHist(const std::vector<GradientPair>& gpair,
 void GHistBuilder::BuildBlockHist(const std::vector<GradientPair>& gpair,
                                   const RowSetCollection::Elem row_indices,
                                   const GHistIndexBlockMatrix& gmatb,
-                                  const std::vector<bst_uint>& feat_set,
                                   GHistRow hist) {
   constexpr int kUnroll = 8;  // loop unrolling factor
   const size_t nblock = gmatb.GetNumBlock();

@@ -22,21 +22,13 @@ class TemporaryDirectory(object):
 def test_binary_classification():
     tm._skip_if_no_sklearn()
     from sklearn.datasets import load_digits
-    try:
-        from sklearn.model_selection import KFold
-    except:
-        from sklearn.cross_validation import KFold
+    from sklearn.model_selection import KFold
 
     digits = load_digits(2)
     y = digits['target']
     X = digits['data']
-    try:
-        kf = KFold(y.shape[0], n_folds=2, shuffle=True, random_state=rng)
-    except TypeError:  # sklearn.model_selection.KFold uses n_split
-        kf = KFold(
-            n_splits=2, shuffle=True, random_state=rng
-        ).split(np.arange(y.shape[0]))
-    for train_index, test_index in kf:
+    kf = KFold(n_splits=2, shuffle=True, random_state=rng)
+    for train_index, test_index in kf.split(X, y):
         xgb_model = xgb.XGBClassifier().fit(X[train_index], y[train_index])
         preds = xgb_model.predict(X[test_index])
         labels = y[test_index]
@@ -48,21 +40,22 @@ def test_binary_classification():
 def test_multiclass_classification():
     tm._skip_if_no_sklearn()
     from sklearn.datasets import load_iris
-    try:
-        from sklearn.cross_validation import KFold
-    except:
-        from sklearn.model_selection import KFold
+    from sklearn.model_selection import KFold
 
-    def check_pred(preds, labels):
-        err = sum(1 for i in range(len(preds))
-                  if int(preds[i] > 0.5) != labels[i]) / float(len(preds))
+    def check_pred(preds, labels, output_margin):
+        if output_margin:
+            err = sum(1 for i in range(len(preds))
+                      if preds[i].argmax() != labels[i]) / float(len(preds))
+        else:
+            err = sum(1 for i in range(len(preds))
+                      if preds[i] != labels[i]) / float(len(preds))
         assert err < 0.4
 
     iris = load_iris()
     y = iris['target']
     X = iris['data']
-    kf = KFold(y.shape[0], n_folds=2, shuffle=True, random_state=rng)
-    for train_index, test_index in kf:
+    kf = KFold(n_splits=2, shuffle=True, random_state=rng)
+    for train_index, test_index in kf.split(X, y):
         xgb_model = xgb.XGBClassifier().fit(X[train_index], y[train_index])
         preds = xgb_model.predict(X[test_index])
         # test other params in XGBClassifier().fit
@@ -71,10 +64,10 @@ def test_multiclass_classification():
         preds4 = xgb_model.predict(X[test_index], output_margin=False, ntree_limit=3)
         labels = y[test_index]
 
-        check_pred(preds, labels)
-        check_pred(preds2, labels)
-        check_pred(preds3, labels)
-        check_pred(preds4, labels)
+        check_pred(preds, labels, output_margin=False)
+        check_pred(preds2, labels, output_margin=True)
+        check_pred(preds3, labels, output_margin=True)
+        check_pred(preds4, labels, output_margin=False)
 
 
 def test_ranking():
@@ -145,13 +138,13 @@ def test_boston_housing_regression():
     tm._skip_if_no_sklearn()
     from sklearn.metrics import mean_squared_error
     from sklearn.datasets import load_boston
-    from sklearn.cross_validation import KFold
+    from sklearn.model_selection import KFold
 
     boston = load_boston()
     y = boston['target']
     X = boston['data']
-    kf = KFold(y.shape[0], n_folds=2, shuffle=True, random_state=rng)
-    for train_index, test_index in kf:
+    kf = KFold(n_splits=2, shuffle=True, random_state=rng)
+    for train_index, test_index in kf.split(X, y):
         xgb_model = xgb.XGBRegressor().fit(X[train_index], y[train_index])
 
         preds = xgb_model.predict(X[test_index])
@@ -169,7 +162,7 @@ def test_boston_housing_regression():
 
 def test_parameter_tuning():
     tm._skip_if_no_sklearn()
-    from sklearn.grid_search import GridSearchCV
+    from sklearn.model_selection import GridSearchCV
     from sklearn.datasets import load_boston
 
     boston = load_boston()
@@ -177,7 +170,8 @@ def test_parameter_tuning():
     X = boston['data']
     xgb_model = xgb.XGBRegressor()
     clf = GridSearchCV(xgb_model, {'max_depth': [2, 4, 6],
-                                   'n_estimators': [50, 100, 200]}, verbose=1)
+                                   'n_estimators': [50, 100, 200]},
+                       cv=3, verbose=1, iid=True)
     clf.fit(X, y)
     assert clf.best_score_ < 0.7
     assert clf.best_params_ == {'n_estimators': 100, 'max_depth': 4}
@@ -187,7 +181,7 @@ def test_regression_with_custom_objective():
     tm._skip_if_no_sklearn()
     from sklearn.metrics import mean_squared_error
     from sklearn.datasets import load_boston
-    from sklearn.cross_validation import KFold
+    from sklearn.model_selection import KFold
 
     def objective_ls(y_true, y_pred):
         grad = (y_pred - y_true)
@@ -197,8 +191,8 @@ def test_regression_with_custom_objective():
     boston = load_boston()
     y = boston['target']
     X = boston['data']
-    kf = KFold(y.shape[0], n_folds=2, shuffle=True, random_state=rng)
-    for train_index, test_index in kf:
+    kf = KFold(n_splits=2, shuffle=True, random_state=rng)
+    for train_index, test_index in kf.split(X, y):
         xgb_model = xgb.XGBRegressor(objective=objective_ls).fit(
             X[train_index], y[train_index]
         )
@@ -220,7 +214,7 @@ def test_regression_with_custom_objective():
 def test_classification_with_custom_objective():
     tm._skip_if_no_sklearn()
     from sklearn.datasets import load_digits
-    from sklearn.cross_validation import KFold
+    from sklearn.model_selection import KFold
 
     def logregobj(y_true, y_pred):
         y_pred = 1.0 / (1.0 + np.exp(-y_pred))
@@ -231,8 +225,8 @@ def test_classification_with_custom_objective():
     digits = load_digits(2)
     y = digits['target']
     X = digits['data']
-    kf = KFold(y.shape[0], n_folds=2, shuffle=True, random_state=rng)
-    for train_index, test_index in kf:
+    kf = KFold(n_splits=2, shuffle=True, random_state=rng)
+    for train_index, test_index in kf.split(X, y):
         xgb_model = xgb.XGBClassifier(objective=logregobj)
         xgb_model.fit(X[train_index], y[train_index])
         preds = xgb_model.predict(X[test_index])
@@ -259,10 +253,11 @@ def test_classification_with_custom_objective():
 def test_sklearn_api():
     tm._skip_if_no_sklearn()
     from sklearn.datasets import load_iris
-    from sklearn.cross_validation import train_test_split
+    from sklearn.model_selection import train_test_split
 
     iris = load_iris()
-    tr_d, te_d, tr_l, te_l = train_test_split(iris.data, iris.target, train_size=120)
+    tr_d, te_d, tr_l, te_l = train_test_split(iris.data, iris.target,
+                                              train_size=120, test_size=0.2)
 
     classifier = xgb.XGBClassifier(booster='gbtree', n_estimators=10)
     classifier.fit(tr_d, tr_l)
@@ -276,7 +271,7 @@ def test_sklearn_api():
 def test_sklearn_api_gblinear():
     tm._skip_if_no_sklearn()
     from sklearn.datasets import load_iris
-    from sklearn.cross_validation import train_test_split
+    from sklearn.model_selection import train_test_split
 
     iris = load_iris()
     tr_d, te_d, tr_l, te_l = train_test_split(iris.data, iris.target, train_size=120)
@@ -287,7 +282,7 @@ def test_sklearn_api_gblinear():
     preds = classifier.predict(te_d)
     labels = te_l
     err = sum([1 for p, l in zip(preds, labels) if p != l]) * 1.0 / len(te_l)
-    assert err < 0.2
+    assert err < 0.5
 
 
 def test_sklearn_plotting():
@@ -401,6 +396,27 @@ def test_kwargs():
     assert clf.get_params()['n_estimators'] == 1000
 
 
+def test_kwargs_grid_search():
+    tm._skip_if_no_sklearn()
+    from sklearn.model_selection import GridSearchCV
+    from sklearn import datasets
+
+    params = {'tree_method': 'hist'}
+    clf = xgb.XGBClassifier(n_estimators=1, learning_rate=1.0, **params)
+    assert clf.get_params()['tree_method'] == 'hist'
+    # 'max_leaves' is not a default argument of XGBClassifier
+    # Check we can still do grid search over this parameter
+    search_params = {'max_leaves': range(2, 5)}
+    grid_cv = GridSearchCV(clf, search_params, cv=5)
+    iris = datasets.load_iris()
+    grid_cv.fit(iris.data, iris.target)
+
+    # Expect unique results for each parameter value
+    # This confirms sklearn is able to successfully update the parameter
+    means = grid_cv.cv_results_['mean_test_score']
+    assert len(means) == len(set(means))
+
+
 @raises(TypeError)
 def test_kwargs_error():
     tm._skip_if_no_sklearn()
@@ -510,23 +526,15 @@ def test_validation_weights_xgbclassifier():
 def test_save_load_model():
     tm._skip_if_no_sklearn()
     from sklearn.datasets import load_digits
-    try:
-        from sklearn.model_selection import KFold
-    except:
-        from sklearn.cross_validation import KFold
+    from sklearn.model_selection import KFold
 
     digits = load_digits(2)
     y = digits['target']
     X = digits['data']
-    try:
-        kf = KFold(y.shape[0], n_folds=2, shuffle=True, random_state=rng)
-    except TypeError:  # sklearn.model_selection.KFold uses n_split
-        kf = KFold(
-            n_splits=2, shuffle=True, random_state=rng
-        ).split(np.arange(y.shape[0]))
+    kf = KFold(n_splits=2, shuffle=True, random_state=rng)
     with TemporaryDirectory() as tempdir:
         model_path = os.path.join(tempdir, 'digits.model')
-        for train_index, test_index in kf:
+        for train_index, test_index in kf.split(X, y):
             xgb_model = xgb.XGBClassifier().fit(X[train_index], y[train_index])
             xgb_model.save_model(model_path)
             xgb_model = xgb.XGBModel()

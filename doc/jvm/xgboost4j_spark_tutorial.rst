@@ -65,6 +65,10 @@ and then refer to the snapshot dependency by adding:
 
   XGBoost4J-Spark now requires Spark 2.3+. Latest versions of XGBoost4J-Spark uses facilities of `org.apache.spark.ml.param.shared` extensively to provide for a tight integration with Spark MLLIB framework, and these facilities are not fully available on earlier versions of Spark.
 
+.. note:: Use of Python in XGBoost4J-Spark
+
+  By default, we use the tracker in `dmlc-core <https://github.com/dmlc/dmlc-core/tree/master/tracker>`_ to drive the training with XGBoost4J-Spark. It requires Python 2.7+. We also have an experimental Scala version of tracker which can be enabled by passing the parameter ``tracker_conf`` as ``scala``.
+
 Data Preparation
 ================
 
@@ -183,6 +187,15 @@ After we set XGBoostClassifier parameters and feature/label column, we can build
 
   val xgbClassificationModel = xgbClassifier.fit(xgbInput)
 
+Early Stopping
+----------------
+
+Early stopping is a feature to prevent the unnecessary training iterations. By specifying ``num_early_stopping_rounds`` or directly call ``setNumEarlyStoppingRounds`` over a XGBoostClassifier or XGBoostRegressor, we can define number of rounds for the evaluation metric going to the unexpected direction to tolerate before stopping the training.
+
+In additional to ``num_early_stopping_rounds``, you also need to define ``maximize_evaluation_metrics`` or call ``setMaximizeEvaluationMetrics`` to specify whether you want to maximize or minimize the metrics in training.
+
+After specifying these two parameters, the training would stop when the metrics goes to the other direction against the one specified by ``maximize_evaluation_metrics`` for ``num_early_stopping_rounds`` iterations.
+
 Prediction
 ==========
 
@@ -274,7 +287,7 @@ and then loading the model in another session:
 With regards to ML pipeline save and load, please refer the next section.
 
 Interact with Other Bindings of XGBoost
-------------------------------------
+---------------------------------------
 After we train a model with XGBoost4j-Spark on massive dataset, sometimes we want to do model serving in single machine or integrate it with other single node libraries for further processing. XGBoost4j-Spark supports export model to local by:
 
 .. code-block:: scala

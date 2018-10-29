@@ -14,6 +14,7 @@
 from subprocess import call
 from sh.contrib import git
 import urllib.request
+from urllib.error import HTTPError
 from recommonmark.parser import CommonMarkParser
 import sys
 import re
@@ -24,8 +25,11 @@ import guzzle_sphinx_theme
 git_branch = [re.sub(r'origin/', '', x.lstrip(' ')) for x in str(git.branch('-r', '--contains', 'HEAD')).rstrip('\n').split('\n')]
 git_branch = [x for x in git_branch if 'HEAD' not in x]
 print('git_branch = {}'.format(git_branch[0]))
-filename, _ = urllib.request.urlretrieve('https://s3-us-west-2.amazonaws.com/xgboost-docs/{}.tar.bz2'.format(git_branch[0]))
-call('if [ -d tmp ]; then rm -rf tmp; fi; mkdir -p tmp/jvm; cd tmp/jvm; tar xvf {}'.format(filename), shell=True)
+try:
+  filename, _ = urllib.request.urlretrieve('https://s3-us-west-2.amazonaws.com/xgboost-docs/{}.tar.bz2'.format(git_branch[0]))
+  call('if [ -d tmp ]; then rm -rf tmp; fi; mkdir -p tmp/jvm; cd tmp/jvm; tar xvf {}'.format(filename), shell=True)
+except HTTPError:
+  print('JVM doc not found. Skipping...')
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -37,7 +41,7 @@ sys.path.insert(0, curr_path)
 
 # -- mock out modules
 import mock
-MOCK_MODULES = ['numpy', 'scipy', 'scipy.sparse', 'sklearn', 'matplotlib', 'pandas', 'graphviz']
+MOCK_MODULES = ['scipy', 'scipy.sparse', 'sklearn', 'pandas']
 for mod_name in MOCK_MODULES:
   sys.modules[mod_name] = mock.Mock()
 
@@ -58,12 +62,18 @@ release = xgboost.__version__
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom ones
 extensions = [
+    'matplotlib.sphinxext.plot_directive',
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',
     'sphinx.ext.mathjax',
     'sphinx.ext.intersphinx',
     'breathe'
 ]
+
+graphviz_output_format = 'png'
+plot_formats = [('svg', 300), ('png', 100), ('hires.png', 300)]
+plot_html_show_source_link = False
+plot_html_show_formats = False
 
 # Breathe extension variables
 breathe_projects = {"xgboost": "doxyxml/"}

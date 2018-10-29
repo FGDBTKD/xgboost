@@ -194,7 +194,7 @@ struct TrainParam : public dmlc::Parameter<TrainParam> {
         .describe("Number of rows in a GPU batch, used for finding quantiles on GPU; "
                   "-1 to use all rows assignted to a GPU, and 0 to auto-deduce");
     DMLC_DECLARE_FIELD(split_evaluator)
-        .set_default("elastic_net,monotonic")
+        .set_default("elastic_net,monotonic,interaction")
         .describe("The criteria to use for ranking splits");
     // add alias of parameters
     DMLC_DECLARE_ALIAS(reg_lambda, lambda);
@@ -292,7 +292,7 @@ XGBOOST_DEVICE inline T CalcGain(const TrainingParams &p, T sum_grad, T sum_hess
 template <typename TrainingParams, typename T>
 XGBOOST_DEVICE inline T CalcWeight(const TrainingParams &p, T sum_grad,
                                T sum_hess) {
-  if (sum_hess < p.min_child_weight) {
+  if (sum_hess < p.min_child_weight || sum_hess <= 0.0) {
     return 0.0;
 }
   T dw;
@@ -389,25 +389,6 @@ template <typename ParamT>
     sum_grad += grad;
     sum_hess += hess;
   }
-};
-
-struct NoConstraint {
-  inline static void Init(TrainParam *param, unsigned num_feature) {
-    param->monotone_constraints.resize(num_feature, 0);
-  }
-  inline double CalcSplitGain(const TrainParam &param, int constraint,
-                              GradStats left, GradStats right) const {
-    return left.CalcGain(param) + right.CalcGain(param);
-  }
-  inline double CalcWeight(const TrainParam &param, GradStats stats) const {
-    return stats.CalcWeight(param);
-  }
-  inline double CalcGain(const TrainParam &param, GradStats stats) const {
-    return stats.CalcGain(param);
-  }
-  inline void SetChild(const TrainParam &param, bst_uint split_index,
-                       GradStats left, GradStats right, NoConstraint *cleft,
-                       NoConstraint *cright) {}
 };
 
 struct ValueConstraint {

@@ -1,5 +1,5 @@
 # coding: utf-8
-# pylint: disable=too-many-arguments, too-many-locals, invalid-name, fixme, E0012, R0912
+# pylint: disable=too-many-arguments, too-many-locals, invalid-name, fixme, E0012, R0912, C0302
 """Scikit-Learn Wrapper interface for XGBoost."""
 from __future__ import absolute_import
 
@@ -69,9 +69,9 @@ class XGBModel(XGBModelBase):
     booster: string
         Specify which booster to use: gbtree, gblinear or dart.
     nthread : int
-        Number of parallel threads used to run xgboost.  (Deprecated, please use n_jobs)
+        Number of parallel threads used to run xgboost.  (Deprecated, please use ``n_jobs``)
     n_jobs : int
-        Number of parallel threads used to run xgboost.  (replaces nthread)
+        Number of parallel threads used to run xgboost.  (replaces ``nthread``)
     gamma : float
         Minimum loss reduction required to make a further partition on a leaf node of the tree.
     min_child_weight : int
@@ -99,14 +99,16 @@ class XGBModel(XGBModelBase):
     missing : float, optional
         Value in the data which needs to be present as a missing value. If
         None, defaults to np.nan.
-    **kwargs : dict, optional
+    \*\*kwargs : dict, optional
         Keyword arguments for XGBoost Booster object.  Full documentation of parameters can
         be found here: https://github.com/dmlc/xgboost/blob/master/doc/parameter.rst.
-        Attempting to set a parameter via the constructor args and **kwargs dict simultaneously
+        Attempting to set a parameter via the constructor args and \*\*kwargs dict simultaneously
         will result in a TypeError.
-        Note:
-            **kwargs is unsupported by Sklearn.  We do not guarantee that parameters passed via
-            this argument will interact properly with Sklearn.
+
+        .. note:: \*\*kwargs unsupported by scikit-learn
+
+            \*\*kwargs is unsupported by scikit-learn.  We do not guarantee that parameters
+            passed via this argument will interact properly with scikit-learn.
 
     Note
     ----
@@ -179,6 +181,27 @@ class XGBModel(XGBModelBase):
             raise XGBoostError('need to call fit or load_model beforehand')
         return self._Booster
 
+    def set_params(self, **params):
+        """Set the parameters of this estimator.
+        Modification of the sklearn method to allow unknown kwargs. This allows using
+        the full range of xgboost parameters that are not defined as member variables
+        in sklearn grid search.
+        Returns
+        -------
+        self
+        """
+        if not params:
+            # Simple optimization to gain speed (inspect is slow)
+            return self
+
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                self.kwargs[key] = value
+
+        return self
+
     def get_params(self, deep=False):
         """Get parameters."""
         params = super(XGBModel, self).get_params(deep=deep)
@@ -217,6 +240,14 @@ class XGBModel(XGBModelBase):
     def save_model(self, fname):
         """
         Save the model to a file.
+
+        The model is saved in an XGBoost internal binary format which is
+        universal among the various XGBoost interfaces. Auxiliary attributes of
+        the Python Booster object (such as feature names) will not be loaded.
+        Label encodings (text labels to numeric labels) will be also lost.
+        **If you are using only the Python interface, we recommend pickling the
+        model object for best results.**
+
         Parameters
         ----------
         fname : string
@@ -227,6 +258,14 @@ class XGBModel(XGBModelBase):
     def load_model(self, fname):
         """
         Load the model from a file.
+
+        The model is loaded from an XGBoost internal binary format which is
+        universal among the various XGBoost interfaces. Auxiliary attributes of
+        the Python Booster object (such as feature names) will not be loaded.
+        Label encodings (text labels to numeric labels) will be also lost.
+        **If you are using only the Python interface, we recommend pickling the
+        model object for best results.**
+
         Parameters
         ----------
         fname : string or a memory buffer
@@ -238,7 +277,7 @@ class XGBModel(XGBModelBase):
 
     def fit(self, X, y, sample_weight=None, eval_set=None, eval_metric=None,
             early_stopping_rounds=None, verbose=True, xgb_model=None,
-            sample_weight_eval_set=None):
+            sample_weight_eval_set=None, callbacks=None):
         # pylint: disable=missing-docstring,invalid-name,attribute-defined-outside-init
         """
         Fit the gradient boosting model
@@ -281,6 +320,14 @@ class XGBModel(XGBModelBase):
         xgb_model : str
             file name of stored xgb model or 'Booster' instance Xgb model to be
             loaded before training (allows training continuation).
+        callbacks : list of callback functions
+            List of callback functions that are applied at end of each iteration.
+            It is possible to use predefined callbacks by using :ref:`callback_api`.
+            Example:
+
+            .. code-block:: python
+
+                [xgb.callback.reset_learning_rate(custom_rates)]
         """
         if sample_weight is not None:
             trainDmatrix = DMatrix(X, label=y, weight=sample_weight,
@@ -321,7 +368,8 @@ class XGBModel(XGBModelBase):
                               self.n_estimators, evals=evals,
                               early_stopping_rounds=early_stopping_rounds,
                               evals_result=evals_result, obj=obj, feval=feval,
-                              verbose_eval=verbose, xgb_model=xgb_model)
+                              verbose_eval=verbose, xgb_model=xgb_model,
+                              callbacks=callbacks)
 
         if evals_result:
             for val in evals_result.items():
@@ -335,7 +383,43 @@ class XGBModel(XGBModelBase):
             self.best_ntree_limit = self._Booster.best_ntree_limit
         return self
 
-    def predict(self, data, output_margin=False, ntree_limit=None):
+    def predict(self, data, output_margin=False, ntree_limit=None, validate_features=True):
+        """
+        Predict with `data`.
+
+        .. note:: This function is not thread safe.
+
+          For each booster object, predict can only be called from one thread.
+          If you want to run prediction using multiple thread, call ``xgb.copy()`` to make copies
+          of model object and then call ``predict()``.
+
+        .. note:: Using ``predict()`` with DART booster
+
+          If the booster object is DART type, ``predict()`` will perform dropouts, i.e. only
+          some of the trees will be evaluated. This will produce incorrect results if ``data`` is
+          not the training data. To obtain correct results on test sets, set ``ntree_limit`` to
+          a nonzero value, e.g.
+
+          .. code-block:: python
+
+            preds = bst.predict(dtest, ntree_limit=num_round)
+
+        Parameters
+        ----------
+        data : DMatrix
+            The dmatrix storing the input.
+        output_margin : bool
+            Whether to output the raw untransformed margin value.
+        ntree_limit : int
+            Limit number of trees in the prediction; defaults to best_ntree_limit if defined
+            (i.e. it has been trained with early stopping), otherwise 0 (use all trees).
+        validate_features : bool
+            When this is True, validate that the Booster's and data's feature_names are identical.
+            Otherwise, it is assumed that the feature_names are the same.
+        Returns
+        -------
+        prediction : numpy array
+        """
         # pylint: disable=missing-docstring,invalid-name
         test_dmatrix = DMatrix(data, missing=self.missing, nthread=self.n_jobs)
         # get ntree_limit to use - if none specified, default to
@@ -344,7 +428,8 @@ class XGBModel(XGBModelBase):
             ntree_limit = getattr(self, "best_ntree_limit", 0)
         return self.get_booster().predict(test_dmatrix,
                                           output_margin=output_margin,
-                                          ntree_limit=ntree_limit)
+                                          ntree_limit=ntree_limit,
+                                          validate_features=validate_features)
 
     def apply(self, X, ntree_limit=0):
         """Return the predicted leaf every tree for each sample.
@@ -372,10 +457,10 @@ class XGBModel(XGBModelBase):
     def evals_result(self):
         """Return the evaluation results.
 
-        If eval_set is passed to the `fit` function, you can call evals_result() to
-        get evaluation results for all passed eval_sets. When eval_metric is also
-        passed to the `fit` function, the evals_result will contain the eval_metrics
-        passed to the `fit` function
+        If **eval_set** is passed to the `fit` function, you can call
+        ``evals_result()`` to get evaluation results for all passed **eval_sets**.
+        When **eval_metric** is also passed to the `fit` function, the
+        **evals_result** will contain the **eval_metrics** passed to the `fit` function.
 
         Returns
         -------
@@ -383,20 +468,26 @@ class XGBModel(XGBModelBase):
 
         Example
         -------
-        param_dist = {'objective':'binary:logistic', 'n_estimators':2}
 
-        clf = xgb.XGBModel(**param_dist)
+        .. code-block:: python
 
-        clf.fit(X_train, y_train,
-                eval_set=[(X_train, y_train), (X_test, y_test)],
-                eval_metric='logloss',
-                verbose=True)
+            param_dist = {'objective':'binary:logistic', 'n_estimators':2}
 
-        evals_result = clf.evals_result()
+            clf = xgb.XGBModel(**param_dist)
 
-        The variable evals_result will contain:
-        {'validation_0': {'logloss': ['0.604835', '0.531479']},
-         'validation_1': {'logloss': ['0.41965', '0.17686']}}
+            clf.fit(X_train, y_train,
+                    eval_set=[(X_train, y_train), (X_test, y_test)],
+                    eval_metric='logloss',
+                    verbose=True)
+
+            evals_result = clf.evals_result()
+
+        The variable **evals_result** will contain:
+
+        .. code-block:: python
+
+            {'validation_0': {'logloss': ['0.604835', '0.531479']},
+            'validation_1': {'logloss': ['0.41965', '0.17686']}}
         """
         if self.evals_result_:
             evals_result = self.evals_result_
@@ -408,9 +499,17 @@ class XGBModel(XGBModelBase):
     @property
     def feature_importances_(self):
         """
+        Feature importances property
+
+        .. note:: Feature importance is defined only for tree boosters
+
+            Feature importance is only defined when the decision tree model is chosen as base
+            learner (`booster=gbtree`). It is not defined for other base learner types, such
+            as linear learners (`booster=gblinear`).
+
         Returns
         -------
-        feature_importances_ : array of shape = [n_features]
+        feature_importances_ : array of shape ``[n_features]``
 
         """
         b = self.get_booster()
@@ -422,9 +521,8 @@ class XGBModel(XGBModelBase):
 
 class XGBClassifier(XGBModel, XGBClassifierBase):
     # pylint: disable=missing-docstring,too-many-arguments,invalid-name
-    __doc__ = """Implementation of the scikit-learn API for XGBoost classification.
-
-    """ + '\n'.join(XGBModel.__doc__.split('\n')[2:])
+    __doc__ = "Implementation of the scikit-learn API for XGBoost classification.\n\n" \
+        + '\n'.join(XGBModel.__doc__.split('\n')[2:])
 
     def __init__(self, max_depth=3, learning_rate=0.1,
                  n_estimators=100, silent=True,
@@ -444,7 +542,7 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
 
     def fit(self, X, y, sample_weight=None, eval_set=None, eval_metric=None,
             early_stopping_rounds=None, verbose=True, xgb_model=None,
-            sample_weight_eval_set=None):
+            sample_weight_eval_set=None, callbacks=None):
         # pylint: disable = attribute-defined-outside-init,arguments-differ
         """
         Fit gradient boosting classifier
@@ -487,6 +585,14 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         xgb_model : str
             file name of stored xgb model or 'Booster' instance Xgb model to be
             loaded before training (allows training continuation).
+        callbacks : list of callback functions
+            List of callback functions that are applied at end of each iteration.
+            It is possible to use predefined callbacks by using :ref:`callback_api`.
+            Example:
+
+            .. code-block:: python
+
+                [xgb.callback.reset_learning_rate(custom_rates)]
         """
         evals_result = {}
         self.classes_ = np.unique(y)
@@ -544,7 +650,8 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
                               evals=evals,
                               early_stopping_rounds=early_stopping_rounds,
                               evals_result=evals_result, obj=obj, feval=feval,
-                              verbose_eval=verbose, xgb_model=None)
+                              verbose_eval=verbose, xgb_model=None,
+                              callbacks=callbacks)
 
         self.objective = xgb_options["objective"]
         if evals_result:
@@ -560,7 +667,7 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
 
         return self
 
-    def predict(self, data, output_margin=False, ntree_limit=None):
+    def predict(self, data, output_margin=False, ntree_limit=None, validate_features=True):
         """
         Predict with `data`.
 
@@ -590,6 +697,9 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         ntree_limit : int
             Limit number of trees in the prediction; defaults to best_ntree_limit if defined
             (i.e. it has been trained with early stopping), otherwise 0 (use all trees).
+        validate_features : bool
+            When this is True, validate that the Booster's and data's feature_names are identical.
+            Otherwise, it is assumed that the feature_names are the same.
         Returns
         -------
         prediction : numpy array
@@ -599,7 +709,12 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
             ntree_limit = getattr(self, "best_ntree_limit", 0)
         class_probs = self.get_booster().predict(test_dmatrix,
                                                  output_margin=output_margin,
-                                                 ntree_limit=ntree_limit)
+                                                 ntree_limit=ntree_limit,
+                                                 validate_features=validate_features)
+        if output_margin:
+            # If output_margin is active, simply return the scores
+            return class_probs
+
         if len(class_probs.shape) > 1:
             column_indexes = np.argmax(class_probs, axis=1)
         else:
@@ -607,13 +722,16 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
             column_indexes[class_probs > 0.5] = 1
         return self._le.inverse_transform(column_indexes)
 
-    def predict_proba(self, data, ntree_limit=None):
+    def predict_proba(self, data, ntree_limit=None, validate_features=True):
         """
         Predict the probability of each `data` example being of a given class.
-        NOTE: This function is not thread safe.
-              For each booster object, predict can only be called from one thread.
-              If you want to run prediction using multiple thread, call xgb.copy() to make copies
-              of model object and then call predict
+
+        .. note:: This function is not thread safe
+
+            For each booster object, predict can only be called from one thread.
+            If you want to run prediction using multiple thread, call ``xgb.copy()`` to make copies
+            of model object and then call predict
+
         Parameters
         ----------
         data : DMatrix
@@ -621,6 +739,10 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         ntree_limit : int
             Limit number of trees in the prediction; defaults to best_ntree_limit if defined
             (i.e. it has been trained with early stopping), otherwise 0 (use all trees).
+        validate_features : bool
+            When this is True, validate that the Booster's and data's feature_names are identical.
+            Otherwise, it is assumed that the feature_names are the same.
+
         Returns
         -------
         prediction : numpy array
@@ -630,7 +752,8 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         if ntree_limit is None:
             ntree_limit = getattr(self, "best_ntree_limit", 0)
         class_probs = self.get_booster().predict(test_dmatrix,
-                                                 ntree_limit=ntree_limit)
+                                                 ntree_limit=ntree_limit,
+                                                 validate_features=validate_features)
         if self.objective == "multi:softprob":
             return class_probs
         else:
@@ -641,10 +764,10 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
     def evals_result(self):
         """Return the evaluation results.
 
-        If eval_set is passed to the `fit` function, you can call evals_result() to
-        get evaluation results for all passed eval_sets. When eval_metric is also
-        passed to the `fit` function, the evals_result will contain the eval_metrics
-        passed to the `fit` function
+        If **eval_set** is passed to the `fit` function, you can call
+        ``evals_result()`` to get evaluation results for all passed **eval_sets**.
+        When **eval_metric** is also passed to the `fit` function, the
+        **evals_result** will contain the **eval_metrics** passed to the `fit` function.
 
         Returns
         -------
@@ -652,20 +775,26 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
 
         Example
         -------
-        param_dist = {'objective':'binary:logistic', 'n_estimators':2}
 
-        clf = xgb.XGBClassifier(**param_dist)
+        .. code-block:: python
 
-        clf.fit(X_train, y_train,
-                eval_set=[(X_train, y_train), (X_test, y_test)],
-                eval_metric='logloss',
-                verbose=True)
+            param_dist = {'objective':'binary:logistic', 'n_estimators':2}
 
-        evals_result = clf.evals_result()
+            clf = xgb.XGBClassifier(**param_dist)
 
-        The variable evals_result will contain:
-        {'validation_0': {'logloss': ['0.604835', '0.531479']},
-         'validation_1': {'logloss': ['0.41965', '0.17686']}}
+            clf.fit(X_train, y_train,
+                    eval_set=[(X_train, y_train), (X_test, y_test)],
+                    eval_metric='logloss',
+                    verbose=True)
+
+            evals_result = clf.evals_result()
+
+        The variable **evals_result** will contain
+
+        .. code-block:: python
+
+            {'validation_0': {'logloss': ['0.604835', '0.531479']},
+            'validation_1': {'logloss': ['0.41965', '0.17686']}}
         """
         if self.evals_result_:
             evals_result = self.evals_result_
@@ -677,8 +806,8 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
 
 class XGBRegressor(XGBModel, XGBRegressorBase):
     # pylint: disable=missing-docstring
-    __doc__ = """Implementation of the scikit-learn API for XGBoost regression.
-    """ + '\n'.join(XGBModel.__doc__.split('\n')[2:])
+    __doc__ = "Implementation of the scikit-learn API for XGBoost regression.\n\n"\
+        + '\n'.join(XGBModel.__doc__.split('\n')[2:])
 
 
 class XGBRanker(XGBModel):
@@ -701,9 +830,9 @@ class XGBRanker(XGBModel):
         booster: string
             Specify which booster to use: gbtree, gblinear or dart.
         nthread : int
-            Number of parallel threads used to run xgboost.  (Deprecated, please use n_jobs)
+            Number of parallel threads used to run xgboost.  (Deprecated, please use ``n_jobs``)
         n_jobs : int
-            Number of parallel threads used to run xgboost.  (replaces nthread)
+            Number of parallel threads used to run xgboost.  (replaces ``nthread``)
         gamma : float
             Minimum loss reduction required to make a further partition on a leaf node of the tree.
         min_child_weight : int
@@ -731,35 +860,50 @@ class XGBRanker(XGBModel):
         missing : float, optional
             Value in the data which needs to be present as a missing value. If
             None, defaults to np.nan.
-        **kwargs : dict, optional
+        \*\*kwargs : dict, optional
             Keyword arguments for XGBoost Booster object.  Full documentation of parameters can
             be found here: https://github.com/dmlc/xgboost/blob/master/doc/parameter.rst.
-            Attempting to set a parameter via the constructor args and **kwargs dict simultaneously
-            will result in a TypeError.
-            Note:
-                **kwargs is unsupported by Sklearn.  We do not guarantee that parameters passed via
-                this argument will interact properly with Sklearn.
+            Attempting to set a parameter via the constructor args and \*\*kwargs dict
+            simultaneously will result in a TypeError.
+
+            .. note:: \*\*kwargs unsupported by scikit-learn
+
+                \*\*kwargs is unsupported by scikit-learn.  We do not guarantee that parameters
+                passed via this argument will interact properly with scikit-learn.
 
         Note
         ----
         A custom objective function is currently not supported by XGBRanker.
 
-        Group information is required for ranking tasks. Before fitting the model, your data need to
-        be sorted by group. When fitting the model, you need to provide an additional array that
+        Note
+        ----
+        Group information is required for ranking tasks.
+
+        Before fitting the model, your data need to be sorted by group. When
+        fitting the model, you need to provide an additional array that
         contains the size of each group.
 
         For example, if your original data look like:
 
+        +-------+-----------+---------------+
         |   qid |   label   |   features    |
+        +-------+-----------+---------------+
         |   1   |   0       |   x_1         |
+        +-------+-----------+---------------+
         |   1   |   1       |   x_2         |
+        +-------+-----------+---------------+
         |   1   |   0       |   x_3         |
+        +-------+-----------+---------------+
         |   2   |   0       |   x_4         |
+        +-------+-----------+---------------+
         |   2   |   1       |   x_5         |
+        +-------+-----------+---------------+
         |   2   |   1       |   x_6         |
+        +-------+-----------+---------------+
         |   2   |   1       |   x_7         |
+        +-------+-----------+---------------+
 
-        then your group array should be [3, 4].
+        then your group array should be ``[3, 4]``.
         """
 
     def __init__(self, max_depth=3, learning_rate=0.1, n_estimators=100,
@@ -782,7 +926,7 @@ class XGBRanker(XGBModel):
 
     def fit(self, X, y, group, sample_weight=None, eval_set=None, sample_weight_eval_set=None,
             eval_group=None, eval_metric=None, early_stopping_rounds=None,
-            verbose=False, xgb_model=None):
+            verbose=False, xgb_model=None, callbacks=None):
         # pylint: disable = attribute-defined-outside-init,arguments-differ
         """
         Fit the gradient boosting model
@@ -830,6 +974,14 @@ class XGBRanker(XGBModel):
         xgb_model : str
             file name of stored xgb model or 'Booster' instance Xgb model to be
             loaded before training (allows training continuation).
+        callbacks : list of callback functions
+            List of callback functions that are applied at end of each iteration.
+            It is possible to use predefined callbacks by using :ref:`callback_api`.
+            Example:
+
+            .. code-block:: python
+
+                [xgb.callback.reset_learning_rate(custom_rates)]
         """
         # check if group information is provided
         if group is None:
@@ -882,7 +1034,8 @@ class XGBRanker(XGBModel):
                               self.n_estimators,
                               early_stopping_rounds=early_stopping_rounds, evals=evals,
                               evals_result=evals_result, feval=feval,
-                              verbose_eval=verbose, xgb_model=xgb_model)
+                              verbose_eval=verbose, xgb_model=xgb_model,
+                              callbacks=callbacks)
 
         self.objective = params["objective"]
 
@@ -899,7 +1052,7 @@ class XGBRanker(XGBModel):
 
         return self
 
-    def predict(self, data, output_margin=False, ntree_limit=0):
+    def predict(self, data, output_margin=False, ntree_limit=0, validate_features=True):
 
         test_dmatrix = DMatrix(data, missing=self.missing)
         if ntree_limit is None:
@@ -907,4 +1060,7 @@ class XGBRanker(XGBModel):
 
         return self.get_booster().predict(test_dmatrix,
                                           output_margin=output_margin,
-                                          ntree_limit=ntree_limit)
+                                          ntree_limit=ntree_limit,
+                                          validate_features=validate_features)
+
+    predict.__doc__ = XGBModel.predict.__doc__
